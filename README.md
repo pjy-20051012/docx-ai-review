@@ -120,6 +120,24 @@ docx-ai-review/
 | `rewrite input.docx paragraph_rewrites.json -o out.docx` | Apply full paragraph rewrites as sentence-level tracked changes / 整段改写按句修订 |
 | `verify annotated.docx` | Check comment reference integrity / 校验批注引用完整性 |
 
+## Refining a review markdown / 意见稿细化
+
+When the review is a paragraph-by-paragraph markdown (original + Chinese translation + issue list + full rewrite), refine it into the structured edit list first, then apply tracked changes:
+当意见稿是逐段 Markdown（原文 + 中文翻译 + 问题 + 整段改写）时，先细化为结构化修改清单，再应用审阅模式修改：
+
+```bash
+python scripts/refine_review_markdown.py input.docx review.md -o polish_edits.json
+python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o revised.docx
+```
+
+## Practical lessons / 实战经验
+
+- Validate every anchor against the current manuscript; reviews often target an older draft. / 所有锚点以当前原稿为准，意见稿常基于旧稿。
+- Check `superscript`/`subscript` formatting before treating plain text as an error; unit exponents are often already superscript in Word. / 先检查上标/下标格式，单位指数常已是上标，不要误改。
+- Apply issue-driven edits only: review-listed issue + present in document + explicit replacement. / 只应用“意见稿列出 + 原稿存在 + 有明确替换”的修改。
+- Pair every tracked change with a reason comment; deduplicate identical comments within a paragraph. / 每条修改配批注理由，同段重复批注去重。
+- Split large rewrites sentence-by-sentence with character-level diffs; never mark unchanged text. / 大段改写按句切分并做字符级 diff，不标记未变化文字。
+
 ## Testing / 测试
 
 ```bash

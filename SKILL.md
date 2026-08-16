@@ -32,13 +32,24 @@ python scripts/ai_review_to_comments.py apply input.docx reviews.json -o annotat
 
 ## Tracked-changes workflow (recommended for clear before/after pairs)
 
-When a review file explicitly provides an original span and a replacement (for example `alendaring` -> `calendaring`, or `W·m-1·K-1` -> `W·m⁻¹·K⁻¹`), use Word's review mode instead of a comment-only suggestion:
+When a review file explicitly provides an original span and a replacement (for example `calendering` -> `calendaring`, or `∅S` -> `φS`), use Word's review mode instead of a comment-only suggestion:
 
 ```bash
 python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o revised.docx
 ```
 
 This applies each edit as a real tracked change (`w:ins` / `w:del`) so Word shows the before/after side by side in the Review tab. Each change also carries a comment with the reason, so the author can confirm each revision and accept or reject it.
+
+## Review-markdown refinement workflow
+
+When the input is a paragraph-by-paragraph review markdown (original + Chinese translation + issue list + full rewrite), refine it into a structured `polish_edits.json` first, then apply it with tracked changes:
+
+```bash
+python scripts/refine_review_markdown.py input.docx review.md -o polish_edits.json
+python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o revised.docx
+```
+
+The refiner only keeps edits that are (1) explicitly listed in the review, (2) still present in the current document, and (3) have a concrete replacement. It also checks run formatting: exponent-like text rendered with `superscript` is treated as correct and skipped.
 
 ## Combined use with paper-polishing skills
 
@@ -49,6 +60,17 @@ python scripts/ai_review_to_comments.py convert input.docx polish_edits.json -o 
 ```
 
 The contract enforces verbatim anchors, atomic edits, paragraph-scoped changes, and optional whole-paragraph rewrites, so the polishing skill's judgments become granular, traceable comments.
+
+## Practical lessons (from real manuscript reviews)
+
+- **Validate against the current document**: reviews are often based on an older draft. Anchors that no longer exist in the manuscript (already-fixed typos, symbols, spacing) must be skipped, not "fixed" again.
+- **Respect formatting**: plain-text extraction hides `superscript`/`subscript`. Unit exponents such as `W·m-1·K-1` are frequently already superscript in Word; verify run properties before flagging or replacing them.
+- **Issue-driven over whole-paragraph application**: applying an AI's full rewritten paragraph wholesale marks large unchanged regions red. Apply only review-listed issues that still exist and have explicit replacements; keep full rewrites as reference comments.
+- **Every modified spot should carry a comment**: comments without an accompanying tracked change read as "why no edit?". Pair each edit with a reason comment that includes the sentence's Chinese translation (when the review provides one) and the matched issue.
+- **Deduplicate comments within a paragraph**: identical rationale text repeated per sentence is noise; one comment per distinct change.
+- **Sentence-level for large rewrites**: split original and rewritten paragraphs into sentences, pair them, then apply character-level diffs so unchanged text stays untouched.
+- **A review paragraph may span multiple physical paragraphs**: locate each sentence independently instead of assuming one block equals one paragraph.
+- **Character-precise run splitting**: splitting must happen at exact character boundaries or whole sentences get deleted. Verify paragraph text is preserved after edits.
 
 ## Rules enforced by the scripts
 
