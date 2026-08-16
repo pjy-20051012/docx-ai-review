@@ -1,104 +1,113 @@
 ---
 name: docx-ai-review
-description: "Use when the user wants AI review or polish feedback applied to a Word document as native Word comments instead of a rewritten draft. Triggers include: AI-modified manuscript to comments, teacher-style review comments on a .docx, character-level run splitting for comment anchoring, and workflows that must preserve the original document body while adding precise inline review notes."
+description: "Use when the user wants AI or mentor review/polish feedback applied to a Word document as native Word comments or Word tracked changes (审阅模式) without rewriting the original body. Triggers include: 意见稿、润色意见、AI 修改稿、导师意见、markdown 逐段意见、审阅模式修订、tracked changes、前后对照、逐句对照、批注、Word 批注、原文加批注、按句修改、高亮修改、接受/拒绝修改、docx 批注。Also use for character-level comment anchoring, sentence-level revision, review-markdown refinement, and preserving original formatting while adding precise review notes."
 ---
 
 # DOCX AI Review Comments
 
-Turn an AI-generated revision into native Word comments anchored to the exact text spans, without changing the original body. The pipeline is: extract paragraph text -> ask the model for structured reviews -> inject comments with character-level anchors.
+把 AI / 导师 / 润色意见应用到 Word 原稿。核心是审阅模式修改：能明确前后对照的地方用 Word 审阅模式（红删绿插）真实修改，直观显示前后变化；每条批注标注该处存在问题、句子中文翻译与修改意见；标注位置必须字符级准确。无法明确替换或只是参考的整段改写只作批注。正文与格式不破坏，最终由作者在“审阅”视图逐条接受或拒绝。
 
-## Prerequisites
+## Trigger keywords / 触发场景
 
-- python-docx >= 1.2.0, lxml, pydantic >= 2.0.
-- Check quickly: `python -c "import docx, lxml, pydantic; print(docx.__version__)"`
+用户需求中出现以下关键词时使用本技能：
 
-## Workflow
+- 意见稿 / 润色意见 / AI 修改稿 / 导师意见 / 师兄意见 / DeepSeek 意见
+- Word 批注 / 批注 / 原文加批注 / 问题批注 / 右侧批注
+- 审阅模式 / 修订 / tracked changes / 删除线 / 红删绿插 / 接受或拒绝修改
+- 前后对照 / 逐句对照 / 按句修改 / 句子级修改 / 一一对照
+- docx / Word 文档修改意见 / markdown 意见稿 / 修改建议落到原文
 
-1. Extract text so the model can see exact anchors:
+## Core idea / 核心思路
+
+1. **原稿优先**：所有锚点以当前文档为准；意见稿常基于旧稿，原稿已修正的问题直接跳过。
+2. **问题驱动**：只修改“意见稿明确列出 + 原稿仍存在 + 有明确替换”的内容，不用整段改写整体套用。
+3. **审阅模式 + 批注**：有前后对照的修改写成 `w:ins` / `w:del`（红删绿插）；每条修改旁批注包含该处存在问题、句子中文翻译与修改意见；段级问题单独一条批注。
+4. **格式感知**：检查 `superscript` / `subscript`，单位指数这类原稿已正确的格式不误改。
+5. **词级 diff**：逐句对照用词级差异（整词替换整词），避免字符级拼接产生乱词；保留词间空格。
+6. **句级对比**：前后文对比以句为单位，句子精确配对后再标注句内差异；无法精确配对的句子跳过并报告。
+
+## Quick start / 快速上手
 
 ```bash
-python scripts/ai_review_to_comments.py dump-text input.docx --output text.json
-```
+# 抽取正文，供模型/意见稿定位
+python scripts/ai_review_to_comments.py dump-text input.docx -o text.json
 
-2. Read `references/review_prompt_template.md`, pass the document context (or the relevant paragraphs from `text.json`) to the model, and ask it to return the JSON review batch defined in that template.
-
-3. Validate the returned JSON against the schema by saving it as `reviews.json` and applying:
-
-```bash
+# 结构化批注（只加批注，不改正文）
 python scripts/ai_review_to_comments.py apply input.docx reviews.json -o annotated.docx
-```
 
-4. Inspect the result. The script reopens the file and verifies that every `commentRangeStart`/`commentRangeEnd`/`commentReference` id has a matching `comments.xml` entry. Optionally render to PDF and inspect visually.
-
-## Tracked-changes workflow (recommended for clear before/after pairs)
-
-When a review file explicitly provides an original span and a replacement (for example `calendering` -> `calendaring`, or `∅S` -> `φS`), use Word's review mode instead of a comment-only suggestion:
-
-```bash
+# 审阅模式修改（polish_edits.json：原文/修改后/理由）
 python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o revised.docx
-```
 
-This applies each edit as a real tracked change (`w:ins` / `w:del`) so Word shows the before/after side by side in the Review tab. Each change also carries a comment with the reason, so the author can confirm each revision and accept or reject it.
+# 整段改写按句修订
+python scripts/ai_review_to_comments.py rewrite input.docx paragraph_rewrites.json -o revised.docx
 
-## Review-markdown refinement workflow
-
-When the input is a paragraph-by-paragraph review markdown (original + Chinese translation + issue list + full rewrite), refine it into a structured `polish_edits.json` first, then apply it with tracked changes:
-
-```bash
+# 把逐段 markdown 意见稿细化为修改清单，再审阅修改
 python scripts/refine_review_markdown.py input.docx review.md -o polish_edits.json
 python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o revised.docx
+
+# 校验批注/修订引用完整性
+python scripts/ai_review_to_comments.py verify revised.docx
 ```
 
-The refiner only keeps edits that are (1) explicitly listed in the review, (2) still present in the current document, and (3) have a concrete replacement. It also checks run formatting: exponent-like text rendered with `superscript` is treated as correct and skipped.
+## Workflow A: structured reviews / polish edits
 
-## Combined use with paper-polishing skills
+输入是结构化 JSON（`reviews.json` 或 `polish_edits.json`）时：
 
-When another paper-polishing skill supplies the revision content, require it to emit the structured edit list defined in `references/polish_skill_contract.md`, then convert directly:
+- `apply`：只注入原生批注，不修改正文。
+- `tracked`：把“原文 → 修改后”逐条写成审阅模式修改，并附修改理由批注。
+
+字段契约见 `references/polish_skill_contract.md`。
+
+## Workflow B: paragraph-by-paragraph review markdown
+
+输入是逐段 Markdown（每段含 **原文 / 中文翻译 / 英文问题 / 修改版本**）时：
+
+1. 用 `refine_review_markdown.py` 解析并细化为 `polish_edits.json`，只保留“意见稿列出 + 原稿存在 + 有明确替换”的修改点。
+2. 用 `tracked` 应用审阅修改。
+3. 兼容两种标记：`英文问题 / 不妥点` 与 `英文不妥 / 错误`、`Composites Part B 修改版本` 与 `Composites Part B 规范改写`。
+
+若意见稿提供完整“原稿 ↔ 新文”逐句对照，按句子配对后用词级 diff 标注差异；相似度过低的句子整句删除+插入；含上标单位的句子跳过。
+
+## Workflow C: combined use with paper-polishing skills
+
+与 `nature-polishing`、`academic-paper` 等润色技能联用时，**先给润色技能提要求**，再接收其输出。要求包括：按 `references/polish_skill_contract.md` 输出结构化修改清单；逐句给出原文与修改后文本；注明问题类别、理由与中文翻译；锚点必须逐字来自当前原稿。这样本技能可直接在文中以审阅模式落改：
 
 ```bash
 python scripts/ai_review_to_comments.py convert input.docx polish_edits.json -o annotated.docx
+python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o revised.docx
 ```
 
-The contract enforces verbatim anchors, atomic edits, paragraph-scoped changes, and optional whole-paragraph rewrites, so the polishing skill's judgments become granular, traceable comments.
+润色技能负责判断与改写，本技能负责精确落点与审阅展示，职责分离。
 
-## Practical lessons (from real manuscript reviews)
+## Practical lessons / 实战经验
 
-- **Validate against the current document**: reviews are often based on an older draft. Anchors that no longer exist in the manuscript (already-fixed typos, symbols, spacing) must be skipped, not "fixed" again.
-- **Respect formatting**: plain-text extraction hides `superscript`/`subscript`. Unit exponents such as `W·m-1·K-1` are frequently already superscript in Word; verify run properties before flagging or replacing them.
-- **Issue-driven over whole-paragraph application**: applying an AI's full rewritten paragraph wholesale marks large unchanged regions red. Apply only review-listed issues that still exist and have explicit replacements; keep full rewrites as reference comments.
-- **Every modified spot should carry a comment**: comments without an accompanying tracked change read as "why no edit?". Pair each edit with a reason comment that includes the sentence's Chinese translation (when the review provides one) and the matched issue.
-- **Deduplicate comments within a paragraph**: identical rationale text repeated per sentence is noise; one comment per distinct change.
-- **Sentence-level for large rewrites**: split original and rewritten paragraphs into sentences, pair them, then apply character-level diffs so unchanged text stays untouched.
-- **A review paragraph may span multiple physical paragraphs**: locate each sentence independently instead of assuming one block equals one paragraph.
-- **Character-precise run splitting**: splitting must happen at exact character boundaries or whole sentences get deleted. Verify paragraph text is preserved after edits.
+- 锚点一律以当前文档为准；意见稿基于旧稿时，原稿已修正的拼写/符号/空格跳过。
+- 格式感知：`superscript`/`subscript` 必须检查；`W·m-1·K-1` 这类单位指数在 Word 中常已是上标，不要误改。
+- 问题驱动优先于整段套用：只改“列出 + 存在 + 有替换”的问题；整段改写只作参考批注。
+- 每条修改配批注，内容包含该处存在问题、句子中文翻译与修改意见；同段相同批注去重；段级问题单独一条批注。
+- 逐句对照用词级 diff（字符级会拼坏单词）；替换文本保留空格；插入保留前导空白。
+- 句子相似度过低时整句删除+插入；句子必须整句精确匹配才 diff，无法匹配的跳过并报告。
+- 句内插入用零宽 span，先分裂 Run。
+- Run 分裂必须字符精确；生成后模拟“接受全部修订”验证无乱词。
+- 一个意见段落可能对应原稿多个物理段落，应逐句定位。
 
-- **Parse both marker styles**: review markdowns may mix ``英文问题 / 不妥点`` and ``英文不妥 / 错误``, and ``Composites Part B 修改版本`` and ``Composites Part B 规范改写``; support both variants when extracting sections.
-- **Word-level diff, not character-level**: character diff mangles replaced words (e.g. ``hardware`` -> ``harare``). Diff token sequences so whole words are deleted/inserted and accepted text stays grammatical.
-- **Preserve spacing**: extract replacement text from the original string including spaces; keep leading whitespace for pure insertions, otherwise ``performance requirements`` becomes ``performancerequirements``.
-- **Whole-sentence fallback**: when a paired sentence has low similarity (<0.5), mark the whole sentence as delete+insert instead of producing noisy word fragments.
-- **Superscript protection**: unit exponents are often already ``superscript`` in Word (``W·m-1·K-1`` reads like a plain-text error but is formatted correctly). Skip spans whose runs carry vertical alignment and skip insertions containing Unicode superscript characters.
-- **Exact-match sentence location only**: reviews are often based on older drafts. Fuzzy locating can anchor to the wrong sentence; diff only sentences that match exactly and report the rest.
-- **Zero-width insertions**: inserting a word inside a sentence needs a zero-width span; split the run at the insertion position first.
-- **Verify accepted state**: after generating tracked changes, simulate Word "accept all" and confirm the resulting text reads correctly instead of being mangled.
+## Rules enforced by scripts
 
-## Rules enforced by the scripts
-
-- Review items must contain `paragraph_index`, exact `anchor_text`, `category` (学术规范 / 语法修正 / 逻辑表达 / 用词精炼 / 句式润色), concise `problem_analysis`, and `suggested_revision`. `occurrence` disambiguates repeated phrases; optional `paragraph_revision` carries the model's full rewritten paragraph and is appended to the comment as reference.
-- Anchors must be a substring of a single paragraph. The run isolator splits `w:r` elements at character offsets with `copy.deepcopy` of formatting and `xml:space` preservation, then hands the exact runs to `Document.add_comment()`. An anchor may span multiple runs, but it must not cross a hyperlink boundary.
-- Comment text format: `【{category}】诊断：{problem_analysis}\n建议修改：{suggested_revision}`; author is `AI Reviewer`, initials `AI`.
+- Review items：`paragraph_index`、精确 `anchor_text`、`category`（学术规范/语法修正/逻辑表达/用词精炼/句式润色）、`problem_analysis`、`suggested_revision`；`occurrence` 消歧，`paragraph_revision` 附整段参考。
+- 锚点必须是单段内子串，可跨 Run 不可跨超链接；分裂保留 `rPr` 与 `xml:space`。
+- 批注格式：`【类别】诊断：…\n建议修改：…`；作者 `AI Reviewer`，缩写 `AI`。
+- 修订必须带 author/date；引用 ID 与 `comments.xml` 一一对应。
 
 ## Troubleshooting
 
-- "anchor crosses a hyperlink boundary": split the review into shorter anchors that stay inside the hyperlink or outside it.
-- "anchor boundary falls inside a tab/line-break": choose an anchor that starts/ends on text.
-- Word warns about a corrupted document: run `python scripts/ai_review_to_comments.py verify annotated.docx` to see the missing reference ids, and inspect the OOXML details in `references/ooxml_notes.md`.
+- 锚点跨超链接/制表符：缩短锚点或调整提示词。
+- Word 提示文档损坏：运行 `verify` 查看缺失引用 ID，参考 `references/ooxml_notes.md`。
+- 单位被误改：检查是否为 `superscript` 格式，并在细化时跳过含上标单位的 span。
 
 ## Testing
-
-Run the skill test suite with the bundled runtime python:
 
 ```bash
 python scripts/test_ai_review.py
 ```
 
-It builds a formatted fixture document (bold/italic runs, hyperlink, repeated phrases), applies reviews, exercises the polishing-skill convert workflow, and checks text preservation plus comment reference integrity.
+覆盖单 Run 分裂、跨 Run、中文、超链接、重复短语、整段改写、审阅模式与联用流程。

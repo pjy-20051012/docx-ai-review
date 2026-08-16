@@ -1,4 +1,4 @@
 interface:
   display_name: "AI 润色批注"
-  short_description: "把 AI 润色意见转为 Word 原生批注，逐字锚定原文不破坏正文"
-  default_prompt: "Use $docx-ai-review to turn this AI polish draft into anchored Word comments without changing the body."
+  short_description: "意见稿转 Word 审阅修订与批注，逐字锚定不破坏正文"
+  default_prompt: "Use $docx-ai-review to turn this review markdown / polish feedback into Word tracked changes and comments on the original document."
