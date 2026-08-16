@@ -56,6 +56,10 @@ Require the polishing skill (e.g. `nature-polishing`, `academic-paper`) to emit 
 
 ```bash
 python scripts/ai_review_to_comments.py convert input.docx polish_edits.json -o annotated.docx
+
+The polished result lands directly in the Word document as tracked changes and comments, so there is no need to compare two windows manually.
+
+![Before/After: polishing skill working directly in Word](docs/images/before-after.png)
 ```
 
 ## Installation

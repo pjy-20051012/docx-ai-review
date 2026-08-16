@@ -56,6 +56,10 @@ python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o 
 
 ```bash
 python scripts/ai_review_to_comments.py convert input.docx polish_edits.json -o annotated.docx
+
+润色结果直接落在 Word 原稿中，以审阅模式和批注呈现，无需开两个窗口人工一一对照。
+
+![使用前后对比：润色技能直接在 Word 中操作](docs/images/before-after.png)
 ```
 
 ## 安装
