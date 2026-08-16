@@ -72,6 +72,15 @@ The contract enforces verbatim anchors, atomic edits, paragraph-scoped changes, 
 - **A review paragraph may span multiple physical paragraphs**: locate each sentence independently instead of assuming one block equals one paragraph.
 - **Character-precise run splitting**: splitting must happen at exact character boundaries or whole sentences get deleted. Verify paragraph text is preserved after edits.
 
+- **Parse both marker styles**: review markdowns may mix ``英文问题 / 不妥点`` and ``英文不妥 / 错误``, and ``Composites Part B 修改版本`` and ``Composites Part B 规范改写``; support both variants when extracting sections.
+- **Word-level diff, not character-level**: character diff mangles replaced words (e.g. ``hardware`` -> ``harare``). Diff token sequences so whole words are deleted/inserted and accepted text stays grammatical.
+- **Preserve spacing**: extract replacement text from the original string including spaces; keep leading whitespace for pure insertions, otherwise ``performance requirements`` becomes ``performancerequirements``.
+- **Whole-sentence fallback**: when a paired sentence has low similarity (<0.5), mark the whole sentence as delete+insert instead of producing noisy word fragments.
+- **Superscript protection**: unit exponents are often already ``superscript`` in Word (``W·m-1·K-1`` reads like a plain-text error but is formatted correctly). Skip spans whose runs carry vertical alignment and skip insertions containing Unicode superscript characters.
+- **Exact-match sentence location only**: reviews are often based on older drafts. Fuzzy locating can anchor to the wrong sentence; diff only sentences that match exactly and report the rest.
+- **Zero-width insertions**: inserting a word inside a sentence needs a zero-width span; split the run at the insertion position first.
+- **Verify accepted state**: after generating tracked changes, simulate Word "accept all" and confirm the resulting text reads correctly instead of being mangled.
+
 ## Rules enforced by the scripts
 
 - Review items must contain `paragraph_index`, exact `anchor_text`, `category` (学术规范 / 语法修正 / 逻辑表达 / 用词精炼 / 句式润色), concise `problem_analysis`, and `suggested_revision`. `occurrence` disambiguates repeated phrases; optional `paragraph_revision` carries the model's full rewritten paragraph and is appended to the comment as reference.

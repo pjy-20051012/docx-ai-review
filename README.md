@@ -137,6 +137,7 @@ python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o 
 - Apply issue-driven edits only: review-listed issue + present in document + explicit replacement. / 只应用“意见稿列出 + 原稿存在 + 有明确替换”的修改。
 - Pair every tracked change with a reason comment; deduplicate identical comments within a paragraph. / 每条修改配批注理由，同段重复批注去重。
 - Split large rewrites sentence-by-sentence with character-level diffs; never mark unchanged text. / 大段改写按句切分并做字符级 diff，不标记未变化文字。
+- Use word-level diffs for sentence pairing (character diffs mangle replaced words), preserve spaces, protect superscript unit exponents, and verify the accepted state. / 逐句对照用词级 diff（字符级会拼坏单词）、保留空格、保护上标单位，并验证接受态。
 
 ## Testing / 测试
 
