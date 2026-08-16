@@ -1,0 +1,34 @@
+{
+  "reviews": [
+    {
+      "paragraph_index": 0,
+      "anchor_text": "显著性",
+      "category": "用词精炼",
+      "problem_analysis": "同一概念连续出现，显得重复",
+      "suggested_revision": "差异",
+      "occurrence": 1
+    },
+    {
+      "paragraph_index": 0,
+      "anchor_text": "显著性检验并未通过",
+      "category": "逻辑表达",
+      "problem_analysis": "结论与上一分句表述冲突",
+      "suggested_revision": "检验结果未达显著水平",
+      "occurrence": 1
+    },
+    {
+      "paragraph_index": 1,
+      "anchor_text": "样本量较小",
+      "category": "学术规范",
+      "problem_analysis": "应补充样本量信息",
+      "suggested_revision": "样本量相对有限"
+    },
+    {
+      "paragraph_index": 2,
+      "anchor_text": "本团队前期报告",
+      "category": "学术规范",
+      "problem_analysis": "内部资料不宜作为公开文献引用",
+      "suggested_revision": "本团队已发表的前期报告"
+    }
+  ]
+}

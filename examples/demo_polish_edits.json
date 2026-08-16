@@ -1,0 +1,24 @@
+{
+  "document": "demo_source.docx",
+  "journal_guidelines": "Example journal / 示例期刊",
+  "edits": [
+    {
+      "paragraph_index": 0,
+      "original_text": "显著性",
+      "revision_type": "用词精炼",
+      "reason": "同一概念连续出现，显得重复",
+      "revised_text": "差异",
+      "occurrence": 1,
+      "whole_paragraph_revision": ""
+    },
+    {
+      "paragraph_index": 1,
+      "original_text": "样本量较小",
+      "revision_type": "学术规范",
+      "reason": "应补充样本量信息",
+      "revised_text": "样本量相对有限",
+      "occurrence": 1,
+      "whole_paragraph_revision": ""
+    }
+  ]
+}
