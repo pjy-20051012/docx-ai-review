@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime as dt
+import difflib
 import json
+import re
 import sys
 import zipfile
 from bisect import bisect_left
@@ -283,6 +285,10 @@ class PolishEdit(BaseModel):
         "",
         description="optional full rewritten paragraph when the polish skill also rewrote it",
     )
+    paragraph_revision: str = Field(
+        "",
+        description="alias for whole_paragraph_revision used by the rewrite command",
+    )
 
     def model_post_init(self, __context) -> None:
         if self.revision_type not in CATEGORIES:
@@ -295,6 +301,19 @@ class PolishBatch(BaseModel):
     document: str = Field("", description="title or filename of the manuscript")
     journal_guidelines: str = Field("", description="journal name or short style notes")
     edits: List[PolishEdit]
+
+
+class ParagraphRewrite(BaseModel):
+    paragraph_index: int = Field(..., ge=0)
+    original_text: str = Field("", description="optional verification copy of the original paragraph")
+    paragraph_revision: str = Field(..., min_length=1)
+    reason: str = Field("AI 整段改写：按期刊规范逐句修订", min_length=1)
+
+
+class RewriteBatch(BaseModel):
+    document: str = Field("")
+    journal_guidelines: str = Field("")
+    paragraphs: List[ParagraphRewrite]
 
 
 def convert_polish_edits_to_reviews(paragraphs, edits: List[PolishEdit]) -> List[ReviewItem]:
@@ -398,6 +417,192 @@ def apply_tracked_edits(doc: Document, edits: List[PolishEdit]) -> int:
     return count
 
 
+def _split_sentences(text: str) -> List[str]:
+    """Split mixed English/Chinese text into sentence units, normalized for matching."""
+    text = _norm_spaces_hyphens(text)
+    boundary_idx = []
+    i = 0
+    while i < len(text) - 1:
+        ch = text[i]
+        nxt = text[i + 1]
+        if ch in ".!?" and (nxt.isspace() or nxt in "\"'(（"):
+            # Require the next word to start with uppercase for English periods.
+            if ch == ".":
+                j = i + 1
+                while j < len(text) and text[j].isspace():
+                    j += 1
+                if j >= len(text) or not text[j].isupper():
+                    i += 1
+                    continue
+            boundary_idx.append(i + 1)
+        elif ch in "。！？" or (ch == "；" and (nxt.isspace() or "\u4e00" <= nxt <= "\u9fff")):
+            boundary_idx.append(i + 1)
+        i += 1
+    parts = []
+    prev = 0
+    for pos in boundary_idx:
+        part = text[prev:pos].strip()
+        if part:
+            parts.append(part)
+        prev = pos
+    tail = text[prev:].strip()
+    if tail:
+        parts.append(tail)
+    sentences = []
+    for part in parts:
+        stripped = part.strip()
+        if stripped:
+            sentences.append(stripped)
+    return sentences
+
+
+def _norm_spaces_hyphens(text: str) -> str:
+    """Normalize Unicode spaces/hyphens to ASCII equivalents without changing length."""
+    out = []
+    for ch in text:
+        if ch == "\u00a0" or ch == "\u202f" or ch == "\u2009" or ch == "\u200a" or ch == "\u2007":
+            out.append(" ")
+        elif ch in "\u2010\u2011\u2012\u2013\u2014\u2015":
+            out.append("-")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _insert_tracked_sentence(paragraph, text: str, after_el, base_run_el) -> object:
+    """Insert text as a tracked-insert sentence after after_el."""
+    ins_el = _make_ins_run(paragraph, text, base_run_el, base_run_el.find(qn("w:rPr")))
+    after_el.addnext(ins_el)
+    return ins_el.find(qn("w:r"))
+
+
+def _delete_tracked_sentence(paragraph, sentence: str) -> None:
+    """Delete an exact sentence with tracked deletion (must be called before other edits)."""
+    p_el = paragraph._p
+    text = paragraph.text
+    norm_text = _norm_spaces_hyphens(text)
+    norm_sentence = _norm_spaces_hyphens(sentence)
+    start = norm_text.find(norm_sentence)
+    if start == -1:
+        raise ValueError(f"rewrite target sentence not found: {norm_sentence[:60]}...")
+    runs = _isolate_runs(paragraph, start, start + len(sentence))
+    for run in runs:
+        _mark_deleted_run(p_el, run._r)
+
+
+def apply_paragraph_rewrite_tracked(
+    doc: Document,
+    paragraph_index: int,
+    revised_paragraph: str,
+    reason: str = "AI 整段改写：按期刊规范逐句修订",
+) -> int:
+    """Apply a full paragraph rewrite as sentence-level tracked changes with comments."""
+    paragraphs = doc.paragraphs
+    if paragraph_index >= len(paragraphs):
+        raise IndexError(f"paragraph_index {paragraph_index} out of range")
+    paragraph = paragraphs[paragraph_index]
+    original = paragraph.text
+    norm_original = _norm_spaces_hyphens(original)
+    orig_sentences = _split_sentences(original)
+    new_sentences = _split_sentences(revised_paragraph)
+    if not orig_sentences or not new_sentences:
+        raise ValueError(f"cannot split paragraph {paragraph_index} into sentences")
+
+    sm = difflib.SequenceMatcher(a=orig_sentences, b=new_sentences, autojunk=False)
+    ops = []
+    for op, o1, o2, n1, n2 in sm.get_opcodes():
+        if op != "equal":
+            ops.append((op, o1, o2, n1, n2))
+
+    # Locate every sentence span in the ORIGINAL paragraph before any mutation.
+    span_by_idx = {}
+    cursor = 0
+    for i, s in enumerate(orig_sentences):
+        ns = _norm_spaces_hyphens(s)
+        start = norm_original.find(ns, cursor)
+        if start == -1:
+            start = norm_original.find(ns)
+        if start == -1:
+            raise ValueError(f"rewrite target sentence not found: {ns[:60]}...")
+        span_by_idx[i] = (start, start + len(s))
+        cursor = start + len(ns)
+
+    # Split all boundaries upfront, then capture the exact container elements per sentence.
+    for i in sorted(span_by_idx):
+        start, end = span_by_idx[i]
+        _split_at_global(paragraph._p, start)
+        _split_at_global(paragraph._p, end)
+    containers, offsets = _char_map(paragraph._p)
+    sentence_containers = {}
+    for i, (start, end) in span_by_idx.items():
+        si = _covering_index(offsets, start)
+        ei = _covering_index(offsets, end - 1)
+        sentence_containers[i] = (si, ei)
+
+    def mark_containers_deleted(si, ei):
+        for j in range(si, ei + 1):
+            container = containers[j]
+            if etree.QName(container.tag).localname == "r":
+                _mark_deleted_run(paragraph._p, container)
+            elif container.tag == qn("w:hyperlink"):
+                for r_el in container.xpath("./w:r"):
+                    _mark_deleted_run(paragraph._p, r_el)
+
+    changed = 0
+    # Process ops from the end backwards using saved element references.
+    for op, o1, o2, n1, n2 in reversed(ops):
+        if op == "insert":
+            anchor_el = paragraph._p[-1]
+            base_run_el = None
+            for r_el in paragraph._p.iter(qn("w:r")):
+                base_run_el = r_el
+            if base_run_el is None:
+                base_run_el = paragraph._p.makeelement(qn("w:r"), {})
+            for s in new_sentences[n1:n2]:
+                ins_el = _make_ins_run(paragraph, s, base_run_el, base_run_el.find(qn("w:rPr")))
+                anchor_el.addnext(ins_el)
+                anchor_el = ins_el
+                doc.add_comment(
+                    runs=[Run(ins_el.find(qn("w:r")), paragraph)],
+                    text=f"【句式润色】修改理由：{reason}",
+                    author=COMMENT_AUTHOR,
+                    initials=COMMENT_INITIALS,
+                )
+                changed += 1
+            continue
+
+        if op == "delete":
+            for i in range(o2 - 1, o1 - 1, -1):
+                si, ei = sentence_containers[i]
+                mark_containers_deleted(si, ei)
+                changed += 1
+            continue
+
+        # replace: pair deleted original sentences with revised sentences in order.
+        for k, j in enumerate(range(o2 - 1, o1 - 1, -1)):
+            si, ei = sentence_containers[j]
+            mark_containers_deleted(si, ei)
+            last_container = containers[ei]
+            while last_container.getparent() is not None and last_container.getparent() is not paragraph._p:
+                last_container = last_container.getparent()
+            revised = new_sentences[n2 - 1 - k]
+            base_run_el = containers[si]
+            if etree.QName(base_run_el.tag).localname != "r":
+                base_run_el = None
+                for r_el in paragraph._p.iter(qn("w:r")):
+                    base_run_el = r_el
+            ins_el = _make_ins_run(paragraph, revised, base_run_el, base_run_el.find(qn("w:rPr")))
+            last_container.addnext(ins_el)
+            doc.add_comment(
+                runs=[Run(ins_el.find(qn("w:r")), paragraph)],
+                text=f"【句式润色】修改理由：{reason}",
+                author=COMMENT_AUTHOR,
+                initials=COMMENT_INITIALS,
+            )
+            changed += 1
+    return changed
+
+
 def verify_tracked_integrity(docx_path: Path) -> List[str]:
     problems: List[str] = []
     with zipfile.ZipFile(docx_path) as zf:
@@ -477,6 +682,14 @@ def main(argv=None) -> int:
     p_tracked.add_argument("input", type=Path)
     p_tracked.add_argument("polish_edits", type=Path)
     p_tracked.add_argument("-o", "--output", type=Path, required=True)
+
+    p_rewrite = sub.add_parser(
+        "rewrite",
+        help="apply full paragraph rewrites as sentence-level tracked changes",
+    )
+    p_rewrite.add_argument("input", type=Path)
+    p_rewrite.add_argument("rewrites", type=Path)
+    p_rewrite.add_argument("-o", "--output", type=Path, required=True)
 
     p_verify = sub.add_parser("verify", help="verify comment markers in an annotated docx")
     p_verify.add_argument("input", type=Path)
@@ -577,6 +790,36 @@ def main(argv=None) -> int:
             return 3
         print(
             f"OK: applied {count} tracked change(s) with comments; saved {args.output}"
+        )
+        return 0
+
+    if args.command == "rewrite":
+        raw = json.loads(args.rewrites.read_text(encoding="utf-8"))
+        try:
+            batch = RewriteBatch.model_validate(raw)
+        except ValidationError as exc:
+            print("Invalid rewrite JSON:")
+            print(exc)
+            return 2
+        doc = Document(str(args.input))
+        total = 0
+        for item in batch.paragraphs:
+            total += apply_paragraph_rewrite_tracked(
+                doc,
+                item.paragraph_index,
+                item.paragraph_revision,
+                item.reason or "AI 整段改写：按期刊规范逐句修订",
+            )
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(args.output))
+        problems = verify_tracked_integrity(args.output)
+        if problems:
+            print("REWRITE VERIFY FAILED")
+            for p in problems:
+                print(" -", p)
+            return 3
+        print(
+            f"OK: applied {total} sentence-level tracked change(s); saved {args.output}"
         )
         return 0
 

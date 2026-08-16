@@ -20,8 +20,10 @@ from ai_review_to_comments import (
     COMMENT_INITIALS,
     PolishBatch,
     PolishEdit,
+    ParagraphRewrite,
     ReviewItem,
     apply_reviews,
+    apply_paragraph_rewrite_tracked,
     apply_tracked_edits,
     convert_polish_edits_to_reviews,
     verify_comment_integrity,
@@ -209,11 +211,43 @@ def main() -> int:
         if "修改理由" not in tracked_comments:
             raise AssertionError("rationale comment missing")
 
+        # Full-paragraph rewrite workflow: sentence-level tracked changes.
+        rewrite_doc = Document(str(fixture))
+        rewrite_out = tmp / "rewrite.docx"
+        p3_original = rewrite_doc.paragraphs[3].text
+        revised_p3 = (
+            "最后一个段落已经按期刊规范改写，包含中文全角标点；"
+            "甲、乙；丙。新增一句用于验证插入。"
+        )
+        rewrite_count = apply_paragraph_rewrite_tracked(
+            rewrite_doc,
+            3,
+            revised_p3,
+            "AI 整段改写测试",
+        )
+        rewrite_doc.save(str(rewrite_out))
+        if rewrite_count < 2:
+            raise AssertionError("rewrite did not produce enough sentence changes")
+        rewrite_problems = verify_tracked_integrity(rewrite_out)
+        if rewrite_problems:
+            raise AssertionError("rewrite integrity problems: " + "; ".join(rewrite_problems))
+        with zipfile.ZipFile(rewrite_out) as zf:
+            rewrite_xml = zf.read("word/document.xml").decode("utf-8")
+        if "<w:del " not in rewrite_xml or "<w:ins " not in rewrite_xml:
+            raise AssertionError("rewrite tracked markers missing")
+        with zipfile.ZipFile(rewrite_out) as zf:
+            rewrite_comments = zf.read("word/comments.xml").decode("utf-8")
+        if "整段改写测试" not in rewrite_comments:
+            raise AssertionError("rewrite rationale comment missing")
+        if "删除" not in rewrite_xml and "w:delText" not in rewrite_xml:
+            raise AssertionError("deleted original text not preserved as tracked deletion")
+
         print("ALL TESTS PASSED")
         print(f"  paragraphs preserved: {len(after)}")
         print(f"  comments injected: {len(after_doc.comments)}")
         print("  convert workflow: ok")
         print("  tracked-changes workflow: ok")
+        print("  paragraph-rewrite workflow: ok")
         print(f"  output: {output}")
         return 0
 

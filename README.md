@@ -43,6 +43,13 @@ python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o 
 Open the result in Word, switch to the Review tab, and accept or reject each change.
 用 Word 打开后，在“审阅”选项卡中即可看到前后对比并逐条接受/拒绝。
 
+For full-paragraph rewrites, the skill splits both the original and the rewritten paragraph into sentences, then applies each pair as a tracked deletion followed by a tracked insertion, so every change has a visible before/after:
+整段改写会自动按句拆分：原句删除、改写句紧跟插入，逐句成对显示前后对照：
+
+```bash
+python scripts/ai_review_to_comments.py rewrite input.docx paragraph_rewrites.json -o revised.docx
+```
+
 ### 2. Combined with paper-polishing skills / 与论文润色技能联用
 
 Use together with polishing skills such as `nature-polishing`, `academic-paper`, or any paper-language-polishing skill. The contract in `references/polish_skill_contract.md` constrains the polishing skill output so comments become more granular:
@@ -110,6 +117,7 @@ docx-ai-review/
 | `apply input.docx reviews.json -o out.docx` | Inject review comments / 注入批注 |
 | `convert input.docx polish_edits.json -o out.docx` | Convert polishing-skill edit list into comments / 把润色修改清单转为批注 |
 | `tracked input.docx polish_edits.json -o out.docx` | Apply edits as tracked changes with reason comments / 审阅模式修订并附批注理由 |
+| `rewrite input.docx paragraph_rewrites.json -o out.docx` | Apply full paragraph rewrites as sentence-level tracked changes / 整段改写按句修订 |
 | `verify annotated.docx` | Check comment reference integrity / 校验批注引用完整性 |
 
 ## Testing / 测试
