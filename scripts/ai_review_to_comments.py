@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime as dt
 import json
 import sys
 import zipfile
@@ -27,6 +28,66 @@ W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 CATEGORIES = ("学术规范", "语法修正", "逻辑表达", "用词精炼", "句式润色")
 COMMENT_AUTHOR = "AI Reviewer"
 COMMENT_INITIALS = "AI"
+
+
+def _word_date() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _make_ins_run(paragraph, text: str, base_run_el, rpr_el) -> object:
+    """Create a tracked-insert w:ins element carrying revised text (caller inserts it)."""
+    p_el = paragraph._p
+    r_new = copy.deepcopy(base_run_el)
+    # Strip existing text/break children so the new run carries only revised text.
+    for child in list(r_new):
+        if etree.QName(child.tag).localname != "rPr":
+            r_new.remove(child)
+    t_new = p_el.makeelement(qn("w:t"), {})
+    t_new.text = text
+    if text != text.strip():
+        t_new.set(qn("xml:space"), "preserve")
+    r_new.append(t_new)
+    ins = p_el.makeelement(qn("w:ins"), {})
+    ins.set(qn("w:id"), str(_next_revision_id(p_el)))
+    ins.set(qn("w:author"), COMMENT_AUTHOR)
+    ins.set(qn("w:date"), _word_date())
+    ins.append(r_new)
+    return ins
+
+
+def _next_revision_id(paragraph_el) -> int:
+    used = [
+        int(x)
+        for x in paragraph_el.xpath(
+            ".//w:ins/@w:id | .//w:del/@w:id"
+        )
+        if x.isdigit()
+    ]
+    return max(used, default=0) + 1
+
+
+def _mark_deleted_run(paragraph_el, r_el) -> None:
+    """Wrap r_el in w:del, converting w:t to w:delText; the run keeps its own rPr."""
+    del_el = paragraph_el.makeelement(qn("w:del"), {})
+    del_el.set(qn("w:id"), str(_next_revision_id(paragraph_el)))
+    del_el.set(qn("w:author"), COMMENT_AUTHOR)
+    del_el.set(qn("w:date"), _word_date())
+    for child in list(r_el):
+        tag = etree.QName(child.tag).localname
+        if tag == "t":
+            child.tag = qn("w:delText")
+    r_el.addprevious(del_el)
+    del_el.append(r_el)
+
+
+def _next_comment_anchor(paragraph, inserted_run_el, deleted_run_els):
+    """Return runs to anchor the rationale comment to."""
+    runs = []
+    if inserted_run_el is not None:
+        runs.append(Run(inserted_run_el, paragraph))
+    elif deleted_run_els:
+        runs.append(Run(deleted_run_els[0], paragraph))
+    return runs
 
 
 class ReviewItem(BaseModel):
@@ -263,6 +324,104 @@ def convert_polish_edits_to_reviews(paragraphs, edits: List[PolishEdit]) -> List
     return reviews
 
 
+def apply_tracked_edits(doc: Document, edits: List[PolishEdit]) -> int:
+    """Apply a polishing edit list as Word tracked changes with rationale comments."""
+    paragraphs = doc.paragraphs
+    count = 0
+    for e in edits:
+        if e.paragraph_index >= len(paragraphs):
+            raise IndexError(
+                f"paragraph_index {e.paragraph_index} out of range (document has {len(paragraphs)} paragraphs)"
+            )
+        paragraph = paragraphs[e.paragraph_index]
+        p_el = paragraph._p
+        text = paragraph.text
+        anchor = e.original_text
+        if anchor and anchor not in text:
+            raise ValueError(
+                f"original_text {anchor!r} not found in paragraph {e.paragraph_index}"
+            )
+        if anchor == e.revised_text:
+            continue
+
+        if anchor:
+            found = -1
+            for _ in range(e.occurrence):
+                found = text.find(anchor, found + 1)
+                if found == -1:
+                    raise ValueError(
+                        f"original_text {anchor!r} occurrence {e.occurrence} not found"
+                    )
+            runs = _isolate_runs(paragraph, found, found + len(anchor))
+            base_run_el = runs[0]._r
+            rpr_el = base_run_el.find(qn("w:rPr"))
+            deleted_els = []
+            for run in runs:
+                _mark_deleted_run(p_el, run._r)
+                deleted_els.append(run._r)
+            inserted_el = None
+            if e.revised_text:
+                ins_el = _make_ins_run(paragraph, e.revised_text, base_run_el, rpr_el)
+                last_el = deleted_els[-1]
+                while last_el.getparent() is not p_el:
+                    last_el = last_el.getparent()
+                last_el.addnext(ins_el)
+                inserted_el = ins_el.find(qn("w:r"))
+        else:
+            # Pure insertion: append after the last text-bearing container in the paragraph.
+            containers, offsets = _char_map(p_el)
+            if not containers:
+                raise ValueError("cannot insert into empty paragraph")
+            insert_after = containers[-1]
+            base_run_el = None
+            for r_el in insert_after.xpath("./w:r"):
+                base_run_el = r_el
+                break
+            if base_run_el is None:
+                raise ValueError("insertion anchor run not found")
+            ins_el = _make_ins_run(paragraph, e.revised_text, base_run_el, base_run_el.find(qn("w:rPr")))
+            insert_after.addnext(ins_el)
+            inserted_el = ins_el.find(qn("w:r"))
+
+        anchor_runs = _next_comment_anchor(paragraph, inserted_el, deleted_els if anchor else [])
+        if anchor_runs:
+            comment_text = (
+                f"【{e.revision_type}】修改理由：{e.reason}"
+            )
+            doc.add_comment(
+                runs=anchor_runs,
+                text=comment_text,
+                author=COMMENT_AUTHOR,
+                initials=COMMENT_INITIALS,
+            )
+        count += 1
+    return count
+
+
+def verify_tracked_integrity(docx_path: Path) -> List[str]:
+    problems: List[str] = []
+    with zipfile.ZipFile(docx_path) as zf:
+        doc_xml = zf.read("word/document.xml")
+        comments_xml = zf.read("word/comments.xml")
+    ns = {"w": W_NS}
+    root = etree.fromstring(doc_xml)
+    revs = root.xpath("//w:ins | //w:del", namespaces=ns)
+    for el in revs:
+        if not el.get(qn("w:author")) or not el.get(qn("w:date")):
+            problems.append(f"revision missing author/date ({etree.QName(el.tag).localname})")
+    comments_root = etree.fromstring(comments_xml)
+    comment_ids = {
+        el.get(qn("w:id"))
+        for el in comments_root.xpath("//w:comment", namespaces=ns)
+        if el.get(qn("w:id")) is not None
+    }
+    for el in root.xpath("//w:commentRangeStart | //w:commentRangeEnd | //w:commentReference", namespaces=ns):
+        cid = el.get(qn("w:id"))
+        if cid not in comment_ids:
+            problems.append(f"missing comment entity for id={cid}")
+    return problems
+
+
 def verify_comment_integrity(docx_path: Path) -> List[str]:
     problems: List[str] = []
     with zipfile.ZipFile(docx_path) as zf:
@@ -310,6 +469,14 @@ def main(argv=None) -> int:
     p_convert.add_argument("input", type=Path)
     p_convert.add_argument("polish_edits", type=Path)
     p_convert.add_argument("-o", "--output", type=Path, required=True)
+
+    p_tracked = sub.add_parser(
+        "tracked",
+        help="apply polish edits as Word tracked changes with rationale comments",
+    )
+    p_tracked.add_argument("input", type=Path)
+    p_tracked.add_argument("polish_edits", type=Path)
+    p_tracked.add_argument("-o", "--output", type=Path, required=True)
 
     p_verify = sub.add_parser("verify", help="verify comment markers in an annotated docx")
     p_verify.add_argument("input", type=Path)
@@ -387,6 +554,29 @@ def main(argv=None) -> int:
             return 3
         print(
             f"OK: converted {len(reviews)} polish edit(s) into {count} comment(s); saved {args.output}"
+        )
+        return 0
+
+    if args.command == "tracked":
+        raw = json.loads(args.polish_edits.read_text(encoding="utf-8"))
+        try:
+            batch = PolishBatch.model_validate(raw)
+        except ValidationError as exc:
+            print("Invalid polish edits JSON:")
+            print(exc)
+            return 2
+        doc = Document(str(args.input))
+        count = apply_tracked_edits(doc, batch.edits)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(args.output))
+        problems = verify_tracked_integrity(args.output)
+        if problems:
+            print("TRACKED VERIFY FAILED")
+            for p in problems:
+                print(" -", p)
+            return 3
+        print(
+            f"OK: applied {count} tracked change(s) with comments; saved {args.output}"
         )
         return 0
 

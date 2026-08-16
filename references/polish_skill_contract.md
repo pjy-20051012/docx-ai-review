@@ -42,6 +42,16 @@ python scripts/ai_review_to_comments.py convert input.docx polish_edits.json -o 
 
 转换器会逐条核对 `original_text` 是否真实存在于对应段落，校验类别，然后把每条修改转换为格式为 `【类别】诊断：理由\n建议修改：修改后文本` 的 Word 批注；`whole_paragraph_revision` 非空时自动附为“整段修改参考”。
 
+## 审阅模式（Track Changes）流程
+
+当修改点具有明确“前后对照”（`original_text` → `revised_text`）时，优先使用 Word 审阅模式，而不是只加批注：
+
+```bash
+python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o revised.docx
+```
+
+每条修改会变成真实的 `w:ins` / `w:del` 修订（Word “审阅”选项卡可直接看到前后对比并接受/拒绝），同时在该处附加一条“修改理由”批注。只有 `revised_text` 与原文不同才生成修订；纯插入、纯删除同样支持。
+
 ## 细化粒度建议
 
 - 拼写与格式问题：一个词或一处符号一条。

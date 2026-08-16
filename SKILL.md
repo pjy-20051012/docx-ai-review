@@ -30,6 +30,16 @@ python scripts/ai_review_to_comments.py apply input.docx reviews.json -o annotat
 
 4. Inspect the result. The script reopens the file and verifies that every `commentRangeStart`/`commentRangeEnd`/`commentReference` id has a matching `comments.xml` entry. Optionally render to PDF and inspect visually.
 
+## Tracked-changes workflow (recommended for clear before/after pairs)
+
+When a review file explicitly provides an original span and a replacement (for example `alendaring` -> `calendaring`, or `W·m-1·K-1` -> `W·m⁻¹·K⁻¹`), use Word's review mode instead of a comment-only suggestion:
+
+```bash
+python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o revised.docx
+```
+
+This applies each edit as a real tracked change (`w:ins` / `w:del`) so Word shows the before/after side by side in the Review tab. Each change also carries a comment with the reason, so the author can confirm each revision and accept or reject it.
+
 ## Combined use with paper-polishing skills
 
 When another paper-polishing skill supplies the revision content, require it to emit the structured edit list defined in `references/polish_skill_contract.md`, then convert directly:

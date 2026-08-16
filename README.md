@@ -33,6 +33,16 @@ python scripts/ai_review_to_comments.py verify annotated.docx
 
 See `examples/` for a working sample / 示例见 `examples/`。
 
+For reviews that clearly provide before/after pairs, use Word review mode (tracked changes) with a reason comment on every change:
+当意见稿明确给出“前后对照”时，使用 Word 审阅模式修改并逐条附批注理由：
+
+```bash
+python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o revised.docx
+```
+
+Open the result in Word, switch to the Review tab, and accept or reject each change.
+用 Word 打开后，在“审阅”选项卡中即可看到前后对比并逐条接受/拒绝。
+
 ### 2. Combined with paper-polishing skills / 与论文润色技能联用
 
 Use together with polishing skills such as `nature-polishing`, `academic-paper`, or any paper-language-polishing skill. The contract in `references/polish_skill_contract.md` constrains the polishing skill output so comments become more granular:
@@ -99,6 +109,7 @@ docx-ai-review/
 | `dump-text input.docx [-o text.json]` | Extract paragraphs with indices / 抽取正文与段落索引 |
 | `apply input.docx reviews.json -o out.docx` | Inject review comments / 注入批注 |
 | `convert input.docx polish_edits.json -o out.docx` | Convert polishing-skill edit list into comments / 把润色修改清单转为批注 |
+| `tracked input.docx polish_edits.json -o out.docx` | Apply edits as tracked changes with reason comments / 审阅模式修订并附批注理由 |
 | `verify annotated.docx` | Check comment reference integrity / 校验批注引用完整性 |
 
 ## Testing / 测试

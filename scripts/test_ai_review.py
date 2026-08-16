@@ -19,10 +19,13 @@ from ai_review_to_comments import (
     COMMENT_AUTHOR,
     COMMENT_INITIALS,
     PolishBatch,
+    PolishEdit,
     ReviewItem,
     apply_reviews,
+    apply_tracked_edits,
     convert_polish_edits_to_reviews,
     verify_comment_integrity,
+    verify_tracked_integrity,
 )
 
 
@@ -179,10 +182,38 @@ def main() -> int:
         if converted[0].paragraph_revision != "整段改写参考文本。":
             raise AssertionError("whole_paragraph_revision not carried through conversion")
 
+        # Tracked-changes workflow: replace a phrase, verify w:ins/w:del + comment.
+        tracked_doc = Document(str(fixture))
+        tracked_edits = [
+            PolishEdit(
+                paragraph_index=0,
+                original_text="研究背景与目的",
+                revision_type="用词精炼",
+                reason="表述略冗长，可精简",
+                revised_text="研究目的",
+            )
+        ]
+        tracked_count = apply_tracked_edits(tracked_doc, tracked_edits)
+        tracked_out = tmp / "tracked.docx"
+        tracked_doc.save(str(tracked_out))
+        if tracked_count != 1:
+            raise AssertionError("tracked edit not applied")
+        problems = verify_tracked_integrity(tracked_out)
+        if problems:
+            raise AssertionError("tracked integrity problems: " + "; ".join(problems))
+        with zipfile.ZipFile(tracked_out) as zf:
+            tracked_xml = zf.read("word/document.xml").decode("utf-8")
+            tracked_comments = zf.read("word/comments.xml").decode("utf-8")
+        if "<w:del " not in tracked_xml or "<w:ins " not in tracked_xml:
+            raise AssertionError("tracked w:del/w:ins missing")
+        if "修改理由" not in tracked_comments:
+            raise AssertionError("rationale comment missing")
+
         print("ALL TESTS PASSED")
         print(f"  paragraphs preserved: {len(after)}")
         print(f"  comments injected: {len(after_doc.comments)}")
-        print(f"  convert workflow: ok")
+        print("  convert workflow: ok")
+        print("  tracked-changes workflow: ok")
         print(f"  output: {output}")
         return 0
 
