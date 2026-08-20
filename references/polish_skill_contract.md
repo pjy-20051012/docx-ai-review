@@ -52,6 +52,23 @@ python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o 
 
 每条修改会变成真实的 `w:ins` / `w:del` 修订（Word “审阅”选项卡可直接看到前后对比并接受/拒绝），同时在该处附加一条“修改理由”批注。只有 `revised_text` 与原文不同才生成修订；纯插入、纯删除同样支持。
 
+### 干净初稿硬性要求
+
+`tracked` 和 `rewrite` 的输入必须是无既有 `w:ins` / `w:del` 的初稿。不能把已经接受修订、部分保留修订或上一轮审阅版再次作为新一轮初稿；否则会出现重复修改、原始文本丢失或修订链混杂。若发现输入含旧修订，应回到真正的无修订初稿重新生成。
+
+生成后必须用初稿对照审阅版的“原始态”（普通文本 + 删除文本，不含插入文本），并核对非目标段落没有修订。可执行审计：
+
+```bash
+python scripts/audit_review_integrity.py clean-original.docx revised.docx \
+  --target-index 30 --target-index 42
+```
+
+### 原生字段与格式要求
+
+含 Zotero、交叉引用、`w:instrText`、`w:fldChar` 或书签的内容必须保留为原生 Word 字段，禁止把引用结果复制成普通文本；落修订时也不得清空或重建字段段落。若 Word 和 Zotero 可用，完成修订后通过 Zotero Word 插件刷新，再核对字段代码与书签结构。
+
+上标/下标是格式状态，不等价于文本错误。单位指数、化学式等已正确使用 `w:vertAlign` 的内容应跳过语言替换；用户明确要求的纯格式修正单独直接处理，不对修订或字段结果做宽泛文本替换。
+
 ## 细化粒度建议
 
 - 拼写与格式问题：一个词或一处符号一条。

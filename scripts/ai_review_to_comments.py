@@ -653,6 +653,26 @@ def verify_comment_integrity(docx_path: Path) -> List[str]:
     return problems
 
 
+def existing_revision_count(doc: Document) -> int:
+    """Count revisions already present before this review pass starts."""
+    return sum(
+        1
+        for tag in (qn("w:ins"), qn("w:del"))
+        for _ in doc._element.iter(tag)
+    )
+
+
+def require_clean_revision_baseline(doc: Document, allow_existing: bool = False) -> None:
+    """Refuse to build a new revision layer on top of an old one by default."""
+    count = existing_revision_count(doc)
+    if count and not allow_existing:
+        raise ValueError(
+            f"input already contains {count} w:ins/w:del revision element(s); "
+            "start from the clean/original DOCX so the new review is a single review layer. "
+            "Use --allow-existing-revisions only for deliberate diagnostic work."
+        )
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="AI review to Word comments")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -682,6 +702,11 @@ def main(argv=None) -> int:
     p_tracked.add_argument("input", type=Path)
     p_tracked.add_argument("polish_edits", type=Path)
     p_tracked.add_argument("-o", "--output", type=Path, required=True)
+    p_tracked.add_argument(
+        "--allow-existing-revisions",
+        action="store_true",
+        help="diagnostic escape hatch; by default tracked mode requires a clean input DOCX",
+    )
 
     p_rewrite = sub.add_parser(
         "rewrite",
@@ -690,6 +715,11 @@ def main(argv=None) -> int:
     p_rewrite.add_argument("input", type=Path)
     p_rewrite.add_argument("rewrites", type=Path)
     p_rewrite.add_argument("-o", "--output", type=Path, required=True)
+    p_rewrite.add_argument(
+        "--allow-existing-revisions",
+        action="store_true",
+        help="diagnostic escape hatch; by default rewrite mode requires a clean input DOCX",
+    )
 
     p_verify = sub.add_parser("verify", help="verify comment markers in an annotated docx")
     p_verify.add_argument("input", type=Path)
@@ -779,6 +809,7 @@ def main(argv=None) -> int:
             print(exc)
             return 2
         doc = Document(str(args.input))
+        require_clean_revision_baseline(doc, args.allow_existing_revisions)
         count = apply_tracked_edits(doc, batch.edits)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         doc.save(str(args.output))
@@ -802,6 +833,7 @@ def main(argv=None) -> int:
             print(exc)
             return 2
         doc = Document(str(args.input))
+        require_clean_revision_baseline(doc, args.allow_existing_revisions)
         total = 0
         for item in batch.paragraphs:
             total += apply_paragraph_rewrite_tracked(

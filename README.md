@@ -39,6 +39,9 @@ python scripts/ai_review_to_comments.py rewrite input.docx paragraph_rewrites.js
 
 # Verify comment/revision integrity
 python scripts/ai_review_to_comments.py verify revised.docx
+
+# Audit against the clean baseline (repeat --target-index for edited paragraphs)
+python scripts/audit_review_integrity.py clean-original.docx revised.docx --target-index 30 --target-index 42
 ```
 
 ### 2. Refine a paragraph-by-paragraph review markdown
@@ -50,12 +53,20 @@ python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o 
 
 The refiner keeps only edits that are review-listed, still present in the current document, and have an explicit replacement. It skips superscript unit exponents that are already correct.
 
+Start every new tracked-review pass from the clean/original DOCX. The CLI rejects
+inputs that already contain `w:ins`/`w:del` by default. Preserve Zotero and
+cross-reference fields as native fields; if Word and Zotero are installed,
+refresh them through the Zotero Word integration after the review pass. Pure
+superscript/subscript formatting fixes are separate from tracked language edits.
+See `references/baseline-fields-and-formatting.md` for the safety checklist.
+
 ### 3. Combined with paper-polishing skills
 
 Require the polishing skill (e.g. `nature-polishing`, `academic-paper`) to emit the structured edit list defined in `references/polish_skill_contract.md`, then apply directly:
 
 ```bash
 python scripts/ai_review_to_comments.py convert input.docx polish_edits.json -o annotated.docx
+```
 
 The polished result lands directly in the Word document as tracked changes and comments, so there is no need to compare two windows manually.
 
@@ -86,12 +97,15 @@ docx-ai-review/
 ├── agents/openai.yaml                # UI metadata
 ├── references/
 │   ├── ooxml_notes.md                # OOXML internals
+│   ├── baseline-fields-and-formatting.md # Clean baselines and native fields
 │   ├── polish_skill_contract.md      # Contract for polishing skills
 │   └── review_prompt_template.md     # Review JSON prompt
 ├── scripts/
 │   ├── ai_review_to_comments.py      # Main CLI
+│   ├── audit_review_integrity.py      # Baseline/revision/field audit
 │   ├── refine_review_markdown.py     # Review markdown refinement
-│   └── test_ai_review.py             # Test suite
+│   ├── test_ai_review.py             # Main test suite
+│   └── test_audit_integrity.py       # Integrity-audit tests
 └── examples/
     ├── demo_source.docx
     ├── demo_reviews.json
@@ -118,11 +132,14 @@ docx-ai-review/
 - Pair every tracked change with a comment containing the problem, sentence translation, and suggestion; deduplicate identical comments within a paragraph.
 - Compare sentences with word-level diffs (character diffs mangle replaced words), preserve spaces, protect superscript units, and verify the accepted state.
 - Split large rewrites sentence-by-sentence; never mark unchanged text.
+- Compare the revised document's original state to the clean baseline; non-target paragraphs must not acquire revisions.
+- Preserve native field codes and bookmarks; do not replace Zotero or cross-reference fields with typed text.
 
 ## Testing
 
 ```bash
 python scripts/test_ai_review.py
+python scripts/test_audit_integrity.py
 ```
 
-Covers run splitting, cross-run spans, Chinese characters, hyperlink anchors, repeated phrases, full-paragraph rewrites, tracked changes and the convert workflow.
+Covers run splitting, cross-run spans, Chinese characters, hyperlink anchors, repeated phrases, full-paragraph rewrites, tracked changes, the convert workflow, and clean-baseline isolation.

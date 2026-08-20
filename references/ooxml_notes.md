@@ -24,6 +24,13 @@ python-docx 1.2.0 的 `Document.comments.add_comment()` 会自动创建 comments
 - 同一段落同一短语的重复匹配由 `occurrence` 字段消歧。
 - 输出后用 `verify_comment_integrity()` 解包 docx，核对 document.xml 中的所有批注 id 都存在于 comments.xml。
 
+## 修订层与字段保护
+
+- 新一轮 `w:ins` / `w:del` 应从无既有修订的初稿生成；否则无法可靠区分上一轮修订与本轮修订。
+- 原始态文本 = 普通文本 + `w:del` 内的 `w:delText`，排除 `w:ins`；接受态文本 = 普通文本 + `w:ins` 内的 `w:t`，排除 `w:del`。
+- `w:instrText`、`w:fldChar`、`w:fldSimple` 和书签不是普通正文。字段代码、字段分隔符和书签结构应在修订前后保持一致。
+- `scripts/audit_review_integrity.py` 会检查初稿是否干净、原始态是否保持、非目标段落是否无修订、字段/书签签名是否一致，以及批注标记是否有对应实体。
+
 ## 已验证的边界用例
 
 - 单个 Run 中间分裂（英文/中文/全角标点）。

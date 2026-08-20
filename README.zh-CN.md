@@ -39,6 +39,9 @@ python scripts/ai_review_to_comments.py rewrite input.docx paragraph_rewrites.js
 
 # 校验批注/修订完整性
 python scripts/ai_review_to_comments.py verify revised.docx
+
+# 以无修订初稿为基准审计（可重复指定目标段落）
+python scripts/audit_review_integrity.py clean-original.docx revised.docx --target-index 30 --target-index 42
 ```
 
 ### 2. 细化逐段 Markdown 意见稿
@@ -50,12 +53,19 @@ python scripts/ai_review_to_comments.py tracked input.docx polish_edits.json -o 
 
 细化器只保留“意见稿列出 + 当前原稿仍存在 + 有明确替换”的修改点，并跳过原稿已是上标的单位指数。
 
+新一轮审阅必须从真正的无修订初稿开始；`tracked` 和 `rewrite` 默认拒绝
+已经含有 `w:ins` / `w:del` 的输入。Zotero 和交叉引用必须保持为原生 Word
+字段，不能改成手打引文；如果 Word 和 Zotero 已安装，审阅完成后通过
+Zotero Word 插件刷新字段。上下标和单位指数先检查格式再判断文本，纯格式
+修正与语言修订分开处理。详细规则见 `references/baseline-fields-and-formatting.md`。
+
 ### 3. 与论文润色技能联用
 
 先要求润色技能（如 `nature-polishing`、`academic-paper`）按 `references/polish_skill_contract.md` 输出结构化修改清单（逐句给出原文、修改后文本、理由与翻译），再直接落改：
 
 ```bash
 python scripts/ai_review_to_comments.py convert input.docx polish_edits.json -o annotated.docx
+```
 
 润色结果直接落在 Word 原稿中，以审阅模式和批注呈现，无需开两个窗口人工一一对照。
 
@@ -86,12 +96,15 @@ docx-ai-review/
 ├── agents/openai.yaml                # 界面元数据
 ├── references/
 │   ├── ooxml_notes.md                # OOXML 底层实现说明
+│   ├── baseline-fields-and-formatting.md # 初稿、字段与格式保护
 │   ├── polish_skill_contract.md      # 润色技能输出契约
 │   └── review_prompt_template.md     # 批注生成提示词
 ├── scripts/
 │   ├── ai_review_to_comments.py      # 主程序
+│   ├── audit_review_integrity.py      # 初稿/修订/字段审计
 │   ├── refine_review_markdown.py     # 意见稿细化
-│   └── test_ai_review.py             # 测试套件
+│   ├── test_ai_review.py             # 主测试套件
+│   └── test_audit_integrity.py       # 完整性审计测试
 └── examples/
     ├── demo_source.docx
     ├── demo_reviews.json
@@ -118,11 +131,13 @@ docx-ai-review/
 - 每条修改配批注（问题、句子翻译、修改意见），同段相同批注去重。
 - 逐句对照用词级 diff（字符级会拼坏单词），保留空格，保护上标单位，并验证接受态。
 - 大段改写按句切分，不标记未变化文字。
+- 以初稿原始态核对审阅版，非目标段落不得出现修订；字段代码和书签结构必须保持不变。
 
 ## 测试
 
 ```bash
 python scripts/test_ai_review.py
+python scripts/test_audit_integrity.py
 ```
 
-覆盖 Run 分裂、跨 Run 选区、中文字符、超链接锚点、重复短语、整段改写、审阅模式与联用流程。
+覆盖 Run 分裂、跨 Run 选区、中文字符、超链接锚点、重复短语、整段改写、审阅模式、联用流程和初稿隔离审计。
